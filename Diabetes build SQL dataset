@@ -1,0 +1,342 @@
+--====================================================
+--Data Science Lens for outreach project success rate
+--====================================================
+--NOTES
+--8/2/2022	SGardner	Lines 10-81 creates temp table for 3 patients demographic information from NextGen (not found in EPIC)
+--						Lines 86-109 creates temp table for Campaign Outreach Success
+--						Lines 114-126 creates a temp table for FPL Regency Rank
+--						Lines 130-137 creates a temp table for Behavioral Diagnosis
+--						Lines 143-193 creates a temp table of all patient EPIC information with previous temp tables for Campaign
+--							Outreach Success, FPL Regency Rank, and Behavioral Diagnosis temp tables
+--						Lines 198-254 creates a temp table for Insurance Status
+--						Lines 260-324 unions the EPIC patient and NextGen patient demographics and adds Insurance Status temp table
+
+--====================================================
+--NextGen Patients Only
+--====================================================
+IF OBJECT_ID('tempdb..#Base') IS NOT NULL DROP TABLE #Base
+SELECT p.med_rec_nbr, p.person_id
+		, per.Age
+		, per.sex
+		, per.race
+		, per.ethnicity
+		, per.language
+		, LEFT(per.zip,5) AS Zip
+		, MAX(pe.enc_nbr) AS MaxEnc
+INTO #Base
+FROM ng.patient AS p
+		INNER JOIN ng.person AS per ON p.person_id = per.person_id
+		INNER JOIN ng.patient_encounter AS pe ON per.person_id = pe.person_id
+WHERE p.med_rec_nbr LIKE'%999999999' –fake patient ID to protect PHI
+		OR p.med_rec_nbr LIKE'%888888888' –fake patient ID to protect PHI
+		OR p.med_rec_nbr LIKE'%777777777' –fake patient ID to protect PHI
+GROUP BY p.med_rec_nbr, p.person_id, per.Age, per.sex, per.race, per.ethnicity, per.language, LEFT(per.zip,5)
+----
+IF OBJECT_ID('tempdb..#NG_Only_Pats') IS NOT NULL DROP TABLE #NG_Only_Pats
+SELECT b.med_rec_nbr
+		, b.person_id
+		, b.Age
+		, CASE
+			WHEN b.Age BETWEEN 0 AND 17 THEN 1
+			WHEN b.Age BETWEEN 18 AND 40 THEN 2
+			WHEN b.Age BETWEEN 41 AND 64 THEN 3
+			WHEN b.Age >= 65 THEN 4
+			ELSE 0
+			END AS AGE_BRACKET
+		, CASE 
+			WHEN b.sex = 'F' THEN 1
+			WHEN b.sex = 'M' THEN 2
+			ELSE 9999 END AS Sex
+		, CASE
+			WHEN b.race = 'More Than One Race ' THEN 12
+			WHEN b.race = 'White' THEN 6
+			WHEN b.race = 'Black/African American' THEN 2
+			ELSE 9999 END AS Race_int
+		, CASE 
+			WHEN b.ethnicity = 'Not Hispanic or Latino' THEN 2
+			WHEN b.ethnicity = 'Hispanic Or Latino' THEN 1
+			ELSE 9999 END AS Ethnicity_Group
+		, CASE 
+			WHEN b.language = 'English' THEN 1
+			WHEN b.language = 'Spanish' THEN 3
+			WHEN b.language = 'Oromo' THEN 50
+			ELSE 9999 END AS Language
+		, b.race
+		, b.ethnicity
+		, b.Zip, 
+		CASE 
+			WHEN pm.payer_name LIKE '%medicare%' THEN 'MEDICARE'
+			WHEN pm.payer_name LIke '%flat%fee%' THEN 'UNINSURED'
+			WHEN pm.payer_name IS NULL THEN 'UNINSURED' ELSE 'XXX' END AS InsStatus
+		, CASE 
+		WHEN b.ZIP = '98103' THEN 1 
+	 	WHEN b.ZIP = '98107' THEN 1
+		WHEN b.ZIP = '98122' THEN 1
+		WHEN b.ZIP = '98118' THEN 1
+		WHEN b.ZIP = '98108' THEN 1
+		WHEN b.ZIP = '98126' THEN 1
+		WHEN b.ZIP = '98101' THEN 1
+		WHEN b.ZIP = '98125' THEN 1
+		WHEN b.ZIP = '98115' THEN 1
+		WHEN b.ZIP = '98133' THEN 1
+		WHEN b.ZIP = '98144' THEN 1
+		WHEN b.ZIP = '98506' THEN 1
+		ELSE 0 END AS NCH_CLINIC_IN_ZIP
+INTO #NG_Only_Pats
+FROM #Base AS b
+		INNER JOIN ng.patient_encounter AS pe ON b.MaxEnc = pe.enc_nbr
+		LEFT OUTER JOIN ng.payer_mstr AS pm ON pe.cob1_payer_id = pm.payer_id
+--=====================================================
+--Pull outreach success
+--======================================================
+IF OBJECT_ID('tempbd..#outreach_base') IS NOT NULL DROP TABLE #outreach_base
+SELECT DISTINCT do.mrn
+INTO #outreach_base
+FROM epic.PATIENT_VIEW as pv
+	INNER JOIN nch.IDENTITY_ID_VIEW_NCH as iiv ON pv.PAT_ID = iiv.PAT_ID
+	INNER JOIN nch.temp_sg_diabetes_outreach_letters_07012022 as do on iiv.IDENTITY_ID = do.mrn --outreach patients
+	INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID
+	INNER JOIN epic.CLARITY_PRC as cp ON pev.APPT_PRC_ID = cp.PRC_ID
+	INNER JOIN epic.CLARITY_DEP_VIEW AS cdv ON pev.DEPARTMENT_ID = cdv.DEPARTMENT_ID
+WHERE 1=1
+	AND pev.APPT_MADE_DATE BETWEEN '2022-06-27' AND '2022-07-27'
+	AND (cp.PRC_NAME = 'OFFICE VISIT 15'
+        OR cp.PRC_NAME = 'OFFICE VISIT 30 MIN'
+        OR cp.PRC_NAME = 'OFFICE VISIT 60'
+        OR cp.PRC_NAME = 'PHONE CONSULT'
+        OR cp.PRC_NAME = 'PHONE CONSULT LONG'
+        OR cp.PRC_NAME = 'NEW PATIENT 15 MIN'
+        OR cp.PRC_NAME = 'NEW PATIENT 30 MIN'
+        OR cp.PRC_NAME = 'PHONE CONSULT - NEW PATIENT'
+		OR cp.PRC_NAME = 'CERT DIABETES EDUCATOR 60'
+		OR cp.PRC_NAME = 'CERT DIABETES EDUCATOR 30')
+	AND cdv.SPECIALTY NOT LIKE '%dental%'
+    AND cdv.SPECIALTY NOT LIKE '%mental health%'
+ORDER BY mrn
+--======================================================
+--Pull FPL
+--======================================================
+IF OBJECT_ID('tempdb..#FPL_base') IS NOT NULL DROP TABLE #FPL_base
+SELECT m.PAT_ID, m.FPL_PERCENTAGE, m.CONTACT_DATE
+		, ROW_NUMBER() OVER(PARTITION BY m.PAT_ID ORDER BY m.CONTACT_DATE DESC) AS Recency_Rank
+INTO #FPL_base
+FROM nch.multiple_site_demographics AS m
+--
+IF OBJECT_ID('tempdb..#FPL_final') IS NOT NULL DROP TABLE #FPL_final
+SELECT fb.PAT_ID, fb.FPL_PERCENTAGE, fb.CONTACT_DATE
+INTO #FPL_final
+FROM #FPL_base AS fb
+WHERE 1=1
+	AND fb.Recency_Rank = 1
+ORDER BY fb.PAT_ID
+--=====================================================
+--Pull Pats with a BH Diagnosis
+--=====================================================
+IF OBJECT_ID('tempdb..#BH_Diag') IS NOT NULL DROP TABLE #BH_Diag
+SELECT ped.PAT_ID
+INTO #BH_Diag
+FROM epic.PAT_ENC_DX_VIEW AS ped
+		--INNER JOIN epic.EDG_CURRENT_ICD10 AS ec ON ped.DX_ID = ec.DX_ID
+		INNER JOIN nch.ICD10_Behavioral_Health_Diagnoses AS i ON ped.DX_ID = i.DX_ID
+GROUP BY ped.PAT_ID
+--=====================================================
+--Base data set
+--=====================================================
+IF OBJECT_ID('tempdb..#Base2') IS NOT NULL DROP TABLE #Base2
+SELECT DISTINCT do.mrn, pv.PAT_ID
+	 , vpf.AGE_YEARS
+	 , CASE
+		WHEN vpf.AGE_YEARS BETWEEN 0 AND 17 THEN 1
+		WHEN vpf.AGE_YEARS BETWEEN 18 AND 40 THEN 2
+		WHEN vpf.AGE_YEARS BETWEEN 41 AND 64 THEN 3
+		WHEN vpf.AGE_YEARS >= 65 THEN 4
+		ELSE 0
+		END AS AGE_BRACKET
+	 , pv.SEX_C AS SEX
+	 , pv.ETHNIC_GROUP_C AS ETHNIC_GROUP
+	 , CASE WHEN d.PAT_ID IS NULL THEN zpr.NAME ELSE d.RACE END AS RACE
+	 , pv.LANGUAGE_C AS LANGUAGE
+	 , CASE 
+		WHEN pv.ZIP = '98103' THEN 1 
+	 	WHEN pv.ZIP = '98107' THEN 1
+		WHEN pv.ZIP = '98122' THEN 1
+		WHEN pv.ZIP = '98118' THEN 1
+		WHEN pv.ZIP = '98108' THEN 1
+		WHEN pv.ZIP = '98126' THEN 1
+		WHEN pv.ZIP = '98101' THEN 1
+		WHEN pv.ZIP = '98125' THEN 1
+		WHEN pv.ZIP = '98115' THEN 1
+		WHEN pv.ZIP = '98133' THEN 1
+		WHEN pv.ZIP = '98144' THEN 1
+		WHEN pv.ZIP = '98506' THEN 1
+		ELSE 0 END AS NCH_CLINIC_IN_ZIP
+	 , CASE
+		WHEN ff.FPL_PERCENTAGE < 100.00 THEN 1
+		WHEN ff.FPL_PERCENTAGE BETWEEN 101.00 AND 150.00 THEN 2
+		WHEN ff.FPL_PERCENTAGE BETWEEN 151.00 AND 200 THEN 3
+		WHEN ff.FPL_PERCENTAGE > 200.00 THEN 4
+		ELSE 5 END AS FPL
+	 , CASE WHEN bd.PAT_ID IS NULL THEN 0 ELSE 1 END AS BH_DIAG
+	 , CASE WHEN iiv.IDENTITY_ID in (select mrn from #outreach_base)THEN 1 ELSE 0 END AS OUTREACH_SUCCESS
+INTO #Base2
+FROM epic.PATIENT_VIEW as pv
+	INNER JOIN epic.V_PAT_FACT as vpf on pv.PAT_ID = vpf.PAT_ID --age
+	INNER JOIN nch.IDENTITY_ID_VIEW_NCH as iiv on pv.PAT_ID = iiv.PAT_ID --NCH patients
+	INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID --appt made date
+	INNER JOIN nch.temp_sg_diabetes_outreach_letters_07012022 as do on iiv.IDENTITY_ID = do.mrn --outreach letter patients
+	INNER JOIN epic.CLARITY_DEP_VIEW AS cdv ON pev.DEPARTMENT_ID = cdv.DEPARTMENT_ID --department
+	LEFT OUTER JOIN nch.enc_demographics AS d ON pv.PAT_ID = d.PAT_ID --race by name
+	LEFT OUTER JOIN epic.PATIENT_RACE AS pr ON pv.PAT_ID = pr.PAT_ID
+	LEFT OUTER JOIN epic.ZC_PATIENT_RACE AS zpr ON pr.PATIENT_RACE_C = zpr.PATIENT_RACE_C --race by integer
+	LEFT OUTER JOIN #FPL_final AS ff ON pv.PAT_ID = ff.PAT_ID
+	LEFT OUTER JOIN #BH_Diag AS bd ON pv.PAT_ID = bd.PAT_ID
+WHERE 1=1
+	AND cdv.SPECIALTY NOT LIKE '%dental%'
+    AND cdv.SPECIALTY NOT LIKE '%mental health%'
+ORDER BY do.mrn
+--=====================================================
+--Pull Insurance Status
+--=====================================================
+IF OBJECT_ID('tempdb..#pat_coverage_prep') IS NOT NULL DROP TABLE #pat_coverage_prep
+SELECT  DISTINCT
+		ii.PAT_ID
+		,ii.IDENTITY_ID as MRN
+		,CASE
+			WHEN epm.RPT_GRP_THREE IS NULL AND zfc.NAME = 'Medicaid' THEN 'MEDICAID'
+			ELSE epm.RPT_GRP_THREE
+		END AS RPT_GRP_THREE
+		,CASE
+			WHEN RPT_GRP_FOUR = 'MEDICAID NON-MEDICAL' AND PAYOR_NAME IN ('MEDICAID WA DENTAL','DENTAQUEST DENTAL MEDICAID') 
+				OR PAYOR_NAME LIKE 'DELTA DENTAL%'
+				THEN 'DENTAL'
+			WHEN RPT_GRP_FOUR = 'MENTAL HEALTH' THEN 'MEDICAL'
+			WHEN RPT_GRP_FOUR IS NULL AND PAYOR_NAME = 'UNITED HEALTHCARE MCRE SUP AH' THEN 'MEDICAL'
+			ELSE RPT_GRP_FOUR
+		END as RPT_GRP_FOUR
+		,zfc.NAME AS FINANCIAL_CLASS_TEXT
+		,epm.PAYOR_ID
+		,epm.PAYOR_NAME
+		,pcfo.FILING_ORDER
+INTO	#pat_coverage_prep
+FROM	#Base2 pb
+		INNER JOIN epic.IDENTITY_ID_VIEW ii ON pb.PAT_ID = ii.PAT_ID AND ii.IDENTITY_TYPE_ID = 143
+		INNER JOIN epic.PAT_CVG_FILE_ORDER_VIEW pcfo ON pb.PAT_ID = pcfo.PAT_ID
+		INNER JOIN epic.COVERAGE_MEM_LIST cml ON pcfo.COVERAGE_ID = cml.COVERAGE_ID
+			AND pcfo.PAT_ID = cml.PAT_ID
+		INNER JOIN epic.COVERAGE cvg ON cml.COVERAGE_ID = cvg.COVERAGE_ID
+		INNER JOIN epic.CLARITY_EPM epm ON cvg.PAYOR_ID = epm.PAYOR_ID -- payors
+		LEFT JOIN	epic.ZC_FIN_CLASS zfc ON epm.FINANCIAL_CLASS = zfc.FIN_CLASS_C
+WHERE	(cml.mem_eff_from_date <= '5/29/2022' OR cml.mem_eff_from_date IS NULL)
+		AND (cml.mem_eff_to_date >= '5/29/2022' -- Coverage ends after or on the Start Date
+			OR cml.mem_eff_to_date IS NULL    )
+		AND ( pcfo.filing_order_cat <> 'spec' OR pcfo.filing_order_cat IS NULL)
+		AND pcfo.FILING_ORDER IS NOT NULL
+		AND ( cml.MEM_COVERED_YN <> 'N' /* Coverage works for the visit */
+				OR cml.MEM_COVERED_YN IS NULL
+			)
+-------------------------------------
+IF OBJECT_ID('tempdb..#pat_coverage_base') IS NOT NULL DROP TABLE #pat_coverage_base
+SELECT  *
+		,ROW_NUMBER() OVER ( PARTITION BY pcp.PAT_ID, pcp.RPT_GRP_FOUR ORDER BY pcp.FILING_ORDER) AS FILE_ORDER_NUM		
+INTO	#pat_coverage_base
+FROM	#pat_coverage_prep pcp
+-------------------------------------
+--All Mult.Site Patients, adding uninsured --MEDICAL
+IF OBJECT_ID('tempdb..#InsStatus') IS NOT NULL DROP TABLE #InsStatus
+SELECT	pb.PAT_ID,
+		'MEDICAL' as MED_OR_DENT,
+		ISNULL(med_cvg.RPT_GRP_THREE,'UNINSURED') as INSURANCE_TYPE
+INTO #InsStatus
+FROM	#Base2 pb
+		LEFT JOIN (
+			SELECT	PAT_ID, RPT_GRP_THREE
+			FROM	#pat_coverage_base
+			WHERE	RPT_GRP_FOUR = 'MEDICAL'
+					AND FILE_ORDER_NUM = 1 --to get primary coverage
+		) med_cvg ON pb.PAT_ID = med_cvg.PAT_ID
+--=====================================================
+--Union Epic and NextGen databases
+--=====================================================
+--IF OBJECT_ID('tempdb..#Count') IS NOT NULL DROP TABLE #Count
+SELECT b2.mrn
+		, b2.PAT_ID
+		, CASE WHEN b2.AGE_YEARS IS NULL THEN 9999 ELSE b2.AGE_YEARS END AS AGE_YEARS
+		, b2.AGE_BRACKET
+		, b2.SEX
+		, CASE WHEN b2.ETHNIC_GROUP IS NULL THEN 9999 ELSE b2.ETHNIC_GROUP END AS ETHNIC_GROUP
+		, CASE
+			WHEN b2. RACE = 'NULL' OR b2.RACE = 'Unknown' THEN 1
+			WHEN b2.RACE = 'Alaskan Native' THEN 2
+			WHEN b2.RACE = 'American Indian' THEN 3
+			WHEN b2.RACE = 'Asian' THEN 4
+			WHEN b2.RACE = 'Black/African American ' THEN 5
+			WHEN b2.RACE = 'More Than One Race' THEN 6
+			WHEN b2.RACE = 'Multi-racial' THEN 7
+			WHEN b2.RACE = 'Native Hawaiian' THEN 8
+			WHEN b2.RACE = 'Pacific Islander' THEN 9
+			WHEN b2.RACE = 'Patient Refused' THEN 10
+			WHEN b2.RACE = 'White' THEN 11
+			ELSE 9999 END AS RACE
+		, CASE WHEN b2.LANGUAGE IS NULL THEN 9999 ELSE b2.LANGUAGE END AS LANGUAGE
+		, b2.NCH_CLINIC_IN_ZIP
+		, b2.BH_DIAG
+		, b2.FPL
+		, CASE
+			WHEN i.INSURANCE_TYPE = 'MEDICAID' THEN 1
+			WHEN i.INSURANCE_TYPE = 'MEDICARE' THEN 2
+			WHEN i.INSURANCE_TYPE = 'PRIVATE' THEN 3
+			WHEN i.INSURANCE_TYPE = 'UNINSURED' THEN 4
+			ELSE 9999 END AS INSURANCE_TYPE
+		, b2.OUTREACH_SUCCESS
+--INTO #Count
+FROM #Base2 as b2 -- EPIC patient demographics
+	LEFT OUTER JOIN #InsStatus AS i on b2.PAT_ID = i.PAT_ID
+UNION
+SELECT ng.med_rec_nbr
+		, '' AS PAT_ID
+		, CASE WHEN ng.Age IS NULL THEN 9999 ELSE ng.Age END AS AGE_YEARS
+		, ng.AGE_BRACKET
+		, ng.Sex
+		, CASE WHEN ng.Ethnicity_Group IS NULL THEN 9999 ELSE ng.Ethnicity_Group END AS ETHNIC_GROUP
+		, CASE
+			WHEN ng.race = 'NULL' OR ng.race = 'Unknown' THEN 1
+			WHEN ng.race = 'Alaskan Native' THEN 2
+			WHEN ng.race = 'American Indian' THEN 3
+			WHEN ng.race = 'Asian' THEN 4
+			WHEN ng.race = 'Black/African American ' THEN 5
+			WHEN ng.race = 'More Than One Race' THEN 6
+			WHEN ng.race = 'Multi-racial' THEN 7
+			WHEN ng.race = 'Native Hawaiian' THEN 8
+			WHEN ng.race = 'Pacific Islander' THEN 9
+			WHEN ng.race = 'Patient Refused' THEN 10
+			WHEN ng.race = 'White' THEN 11
+			ELSE 9999 END AS RACE
+		, CASE WHEN ng.Language IS NULL THEN 9999 ELSE ng.Language END AS LANGUAGE
+		, ng.NCH_CLINIC_IN_ZIP
+		, 0 AS BH_DIAG --Do not know status, labeling as none
+		, 5 AS FPL --Unable to obtain status, labeling as unknown
+		, CASE
+			WHEN ng.InsStatus = 'MEDICAID' THEN 1
+			WHEN ng.InsStatus = 'MEDICARE' THEN 2
+			WHEN ng.InsStatus = 'PRIVATE' THEN 3
+			WHEN ng.InsStatus = 'UNINSURED' THEN 4
+			ELSE 9999 END AS INSURANCE_TYPE
+		, 0 AS OUTREACH_SUCCSS --Not in Epic, means no appts made
+FROM #NG_Only_Pats as ng -- NextGen Patient Demographics
+--
+--SELECT DISTINCT c.ETHNIC_GROUP
+--FROM #Count as c
+--GROUP BY c.ETHNIC_GROUP
+--ORDER BY c.ETHNIC_GROUP
+--
+DROP TABLE #outreach_base
+DROP TABLE #FPL_base
+DROP TABLE #FPL_final
+DROP TABLE #BH_Diag
+DROP TABLE #Base
+DROP TABLE #Base2
+DROP TABLE #InsStatus
+DROP TABLE #NG_Only_Pats
+DROP TABLE #pat_coverage_base
+DROP TABLE #pat_coverage_prep
+--DROP TABLE #Count
