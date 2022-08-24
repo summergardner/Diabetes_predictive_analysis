@@ -1,0 +1,59 @@
+# Import libraries
+
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+from sklearn.neural_network import MLPRegressor
+#from sklearn.naive_bayes import GaussianNB
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.metrics import r2_score
+import statsmodels.api as sm
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+# Upload & exploration of dataset
+
+outreach_success = pd.read_excel('/Users/rugar/IMT599_Internship/Outreach_Campaign_Success.xlsx')
+
+outreach_success.isnull().sum() # checking for NULL values
+outreach_success.isna().sum() # checking for NA values
+outreach_success.shape # (1653,10) - As expected
+print(outreach_success.columns.values) # confirming column names
+
+outreach_success # view dataset
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+# Prepare dataset for training and evaluation for all features
+X = outreach_success.iloc[:,0:9] 
+y = outreach_success.iloc[:,9] # outreach_success feature
+
+X_train, X_test, y_train, y_test = train_test_split(X,y, test_size=0.3, random_state=42) # doing a 30%/70% split
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+# Multilinear Regression for all features
+
+# creating an object of Linear Regression class
+LR = LinearRegression()
+
+# fitting the training data
+LR.fit(X_train,y_train)
+
+y_prediction =  LR.predict(X_test)
+
+# predicting the accuracy score
+score=r2_score(y_test,y_prediction)
+#print('r2 score is',score)
+print('mean_sqrd_error is =',mean_squared_error(y_test,y_prediction))
+print('root_mean_squared error of is =',np.sqrt(mean_squared_error(y_test,y_prediction)))
+
+# Stats
+LR_model = sm.OLS(y,X).fit()
+print(LR_model.summary())
