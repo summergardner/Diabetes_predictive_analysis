@@ -1,0 +1,51 @@
+# Import libraries
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import statsmodels.api as sm
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn import metrics
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+# Upload & exploration of dataset
+
+outreach_success = pd.read_excel('/Users/rugar/IMT599_Internship/Outreach_Campaign_Success.xlsx')
+
+outreach_success.isnull().sum() # checking for NULL values
+outreach_success.isna().sum() # checking for NA values
+outreach_success.shape # (1653,10) - As expected
+print(outreach_success.columns.values) # confirming column names
+
+outreach_success # view dataset
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+# Random Forest for all demographics
+
+X = outreach_success.iloc[:,0:9]
+y = outreach_success.iloc[:,9]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state=10)
+
+model = RandomForestClassifier(n_estimators = 1000)
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+
+# Metrics (precision, recall, f1-score)
+print(metrics.classification_report(y_pred, y_test))
+
+# Confusion Matrics
+mat = confusion_matrix(y_test, y_pred)
+sns.heatmap(mat.T, square = True, annot = True, fmt = 'd', cbar = False)
+plt.xlabel('true label')
+plt.ylabel('predicted label')
+
+print(X.columns)
