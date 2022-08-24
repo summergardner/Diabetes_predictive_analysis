@@ -1,0 +1,51 @@
+# Import libraries
+
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+from sklearn.neural_network import MLPRegressor
+#from sklearn.naive_bayes import GaussianNB
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.metrics import r2_score
+import statsmodels.api as sm
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, classification_report
+
+----------------------------------------------------------------------------------------------------------------------------------------------
+# Upload & exploration of dataset
+
+outreach_success = pd.read_excel('/Users/rugar/IMT599_Internship/Outreach_Campaign_Success.xlsx')
+
+outreach_success.isnull().sum() # checking for NULL values
+outreach_success.isna().sum() # checking for NA values
+outreach_success.shape # (1653,10) - As expected
+print(outreach_success.columns.values) # confirming column names
+
+outreach_success # view dataset
+
+----------------------------------------------------------------------------------------------------------------------------------------------
+# Logistic regression of all demographics
+
+X = outreach_success.iloc[:,0:9] 
+y = outreach_success.iloc[:,9] # outreach_success feature
+
+X_train, X_test, y_train, y_test = train_test_split(X,y, test_size=0.3, random_state=42) # doing a 30%/70% split
+
+logmodel = LogisticRegression()
+logmodel.fit(X_train, y_train)
+ 
+predictions = logmodel.predict(X_test)
+labels = [0, 1]
+cm = confusion_matrix(y_test, predictions, labels)
+print(cm)
+print(accuracy_score(y_test, predictions))
+print(classification_report(y_test,predictions))
